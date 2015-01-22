@@ -17,6 +17,6 @@ File Structure :
  
 README.md  
 report.Rmd  
-report.html 
+report.html  
 ./data/pml-training.csv  
 ./data/pml-testing.csv  
