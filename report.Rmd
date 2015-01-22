@@ -1,0 +1,184 @@
+---
+title: "Pratical Machine Learning Project"
+author: "Chiu Wei Chieh"
+output: html_document
+---
+***
+## Introduction
+
+The goal of this project is to use machine learning algorithm to perform human activity recognition (HAR). The datasets are provided by [Groupware@LES](http://groupware.les.inf.puc-rio.br/har). According to the website, there are 6 participants performing one set, 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions labeled as A, B, C, D, E. A is the correct manner and the rest represent different wrong poses.  
+
+During the experiment, participants wear belt, glove, arm-band and use a 1.25 kg dumbbell. Sensors are attached on these devices and stream recorded data to the computer. There will be a lot of noise and missing values in the collected data because of the nature of the sensor.
+
+We can use this kind of algorithm to help people improving their performance or avoiding injury.
+
+***
+
+## Methods
+
+### Load and Split dataset
+
+```{r warning=FALSE, message=FALSE, results='hide'}
+# Have to set system enviroment to use rJava package on my computer
+Sys.setenv(JAVA_HOME="C:\\Program Files\\Java\\jdk1.7.0_45\\jre\\")
+library(ggplot2)
+library(caret)
+
+rawTrain <- read.csv('./data/pml-training.csv', na.strings = c("","NA"))
+rawTest <- read.csv('./data/pml-testing.csv', na.strings = c("","NA"))
+```
+
+Split the dataset into 3 categories : training(60%), testing(20%), validation(20%).
+
+```{r}
+set.seed(1234)
+inTrain <- createDataPartition(y = rawTrain$classe, p=0.8, list=FALSE)
+subTrain <- rawTrain[inTrain,]
+validation <- rawTrain[-inTrain,]
+
+trainInTrain <- createDataPartition(y = subTrain$classe, p=0.75, list=FALSE)
+training <- subTrain[trainInTrain,]
+testing <- subTrain[-trainInTrain,]
+
+dim(training)
+dim(validation)
+dim(testing)
+```
+
+### Exploratory analysis
+
+```{r warning=FALSE, results='hide'}
+summary(training)
+head(training, 2)
+```
+
+Part of summary
+```
+ stddev_pitch_forearm var_pitch_forearm  avg_yaw_forearm    stddev_yaw_forearm
+ Min.   : 0.000       Min.   :   0.000   Min.   :-153.082   Min.   :  0.000   
+ 1st Qu.: 0.382       1st Qu.:   0.146   1st Qu.: -17.967   1st Qu.:  0.509   
+ Median : 5.613       Median :  31.510   Median :   2.087   Median : 26.440   
+ Mean   : 8.470       Mean   : 156.150   Mean   :  21.904   Mean   : 47.087   
+ 3rd Qu.:13.699       3rd Qu.: 187.666   3rd Qu.:  87.341   3rd Qu.: 96.559   
+ Max.   :47.745       Max.   :2279.617   Max.   : 167.326   Max.   :170.470   
+ NA's   :11518        NA's   :11518      NA's   :11518      NA's   :11518   
+```
+
+After load and summarize dataset, we can find :   
+1. There are 19622 obs and 160 variables.  
+2. There are lots of NA values.  
+3. Column 1~7 are obviously not related to the outcome(classe).  
+
+The activity measured is Dumbbell Biceps Curl. So we plot dumbbell and arm data to see if there is any pattern.
+
+```{r warning=FALSE, fig.width=16, fig.height=12}
+library(grid)
+library(gridExtra)
+variables <- names(rawTrain)
+meanVars <- variables[grepl("^avg", variables, perl=TRUE)]
+plot1 <- qplot(avg_pitch_arm, avg_pitch_forearm, colour=classe, data=training)
+plot2 <- qplot(avg_roll_arm, avg_roll_forearm, colour=classe, data=training)
+plot3 <- qplot(avg_roll_arm, avg_roll_dumbbell, colour=classe, data=training)
+plot4 <- qplot(avg_pitch_forearm, avg_pitch_dumbbell, colour=classe, data=training)
+grid.arrange(plot1, plot2, plot3, plot4, ncol=2)
+```
+
+In the plot, we find :  
+1. There are some clusters around zero.  
+2. Some outliers of classe A can be found in all plots. This means there may be some different patterns between correct pose (classe A) and wrong poses.  
+
+### Preprocessing and feature selection
+
+```{r}
+# Remove redundant columns
+tidyTraining <- training[,-c(1:7)]
+# Remove columns with NA values
+tidyTraining <- tidyTraining[ ,colSums(is.na(tidyTraining)) == 0]
+# Perform nearZeroVariance check
+nearZeroTable <- nearZeroVar(tidyTraining, saveMetrics=TRUE)
+nearZeroTable$nzv[nearZeroTable$nzv]
+```
+
+The nearZeroTable shows that no remaining variables have zero variance. So we are going to use them as the features to train our model to catch as much information as possible.
+
+### Cross-validation
+
+We are going to use k-fold cross-validation and build multiple models with different classificaiton algorithms.
+```{r}
+fitControl <- trainControl(method = "cv", number = 10)
+```
+
+### Fit models
+
+> Tree
+
+```{r warning=FALSE, message=FALSE}
+treeFit <- train(classe ~., data = tidyTraining, method = "rpart", trControl = fitControl)
+treeFit
+```
+
+> Boosting Tree
+
+```{r warning=FALSE, message=FALSE}
+boostingTreeFit <- train(classe ~., data = tidyTraining, method = "gbm", trControl = fitControl, verbose = FALSE)
+boostingTreeFit
+```
+
+The model using boosting tree clearly performs better than another. Therefore we use this model as our final model.
+
+### Predict testing dataset
+
+```{r warning=FALSE}
+predTraining <- predict(boostingTreeFit, training)
+in.error.rate <- sum(training$classe != predTraining) / nrow(training)
+predTesting <- predict(boostingTreeFit, testing)
+out.error.rate <- sum(testing$classe != predTesting) / nrow(testing)
+
+errorTable <- data.frame("In sample error"=in.error.rate,"out of sample error"=out.error.rate)
+errorTable
+```
+
+As the result shows, out of sample error is larger than in sample error. But due to k-fold cross-validation process, they are still very close. So no further tuning is performed to prevent overfitting.
+
+### Validating
+
+```{r warning=FALSE}
+predValidation <- predict(boostingTreeFit, validation)
+out.error.rate <- sum(validation$classe != predValidation) / nrow(validation)
+errorTable <- data.frame("In sample error"=in.error.rate,"out of sample error"=out.error.rate)
+errorTable
+confusionMatrix(predValidation, validation$classe)
+```
+
+***
+
+## Results
+
+> - The final model has 52 predictors and about 96% accuracy. The training method is boosting tree.   
+> - There isn't much difference between in and out sample error because we didn't overfit the model.
+> - Error of prediction on testing(0.038) and validation(0.035) are similar. So this model should perform consistantly on general data. 
+
+### Prediction for submission
+
+```{r warning=FALSE, eval=FALSE}
+predSubmission <- predict(boostingTreeFit, rawTest)
+predSubmission
+
+answers <- predSubmission 
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(answers)
+```
+
+***
+
+## Reference
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz3PSlYpGSR
